@@ -1,0 +1,21 @@
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+req_extensions = req_ext
+prompt = no
+[req_distinguished_name]
+C = VN
+ST = SouthEast Vietnam
+L = Saigon
+O = End User Organization
+OU = End User Organization Unit
+CN = End User Common Name
+[v3_req]
+keyUsage = critical, keyCertSign, digitalSignature, keyAgreement
+extendedKeyUsage = serverAuth, codeSigning
+subjectAltName = @alt_names
+[req_ext]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+[alt_names]
