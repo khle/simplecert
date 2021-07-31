@@ -2,8 +2,10 @@ const https = require('https')
 const fs = require('fs')
 
 const options = {
-  key: fs.readFileSync('output/eu/private/key.pem'),
-  cert: fs.readFileSync('output/eu/certs/cert.pem')
+  //key: fs.readFileSync('output/eu/private/key.pem'),
+  //cert: fs.readFileSync('output/eu/certs/cert.pem'),
+  pfx: fs.readFileSync('output/eu/certs/cert.p12'),
+  passphrase: 'foobar'
 }
 
 https

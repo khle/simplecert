@@ -1,4 +1,4 @@
-const { Input } = require('enquirer')
+const { Input, Select } = require('enquirer')
 const fs = require('fs/promises')
 const { chmod } = require('fs/promises')
 const util = require('util')
@@ -25,6 +25,34 @@ async function query (question) {
 
   const answer = await prompt.run()
   return answer
+}
+
+async function getPassphrase () {
+  const choiceAutoPw = 'Auto generate the passphrase'
+  const choiceSupplyPw = 'Provide my passphrase'
+  const choiceNoPw = 'No passphrase'
+
+  const selectPwChoice = new Select({
+    name: 'mainmenu',
+    message:
+      'Do you want to auto generate the passphrase, provide your own passphrase or no passphrase?',
+    choices: [choiceAutoPw, choiceSupplyPw, choiceNoPw]
+  })
+
+  const answer = await selectPwChoice.run()
+  if (answer === choiceAutoPw) {
+    const pw = await genpw()
+    log('Generated passphrase is:')
+    log(info(pw))
+    return pw
+  } else if (answer === choiceSupplyPw) {
+    const pw = await query('Please type your passphrase')
+    log(info(pw))
+    return pw
+  } else {
+    log(info('No passphrase is required'))
+    return ''
+  }
 }
 
 async function createPrivateKeyForCA (password) {
@@ -75,9 +103,13 @@ async function createPrivateKeyForEndUser (password) {
 
   try {
     await fs.mkdir(`${privateKeyDir}`, { recursive: true })
-    await exec(
-      `openssl genrsa -aes256 -passout pass:${password} -out ${keyFilePath} ${bitPairs}`
-    )
+    if (!password || password.length === 0) {
+      await exec(`openssl genrsa -out ${keyFilePath} ${bitPairs}`)
+    } else {
+      await exec(
+        `openssl genrsa -aes256 -passout pass:${password} -out ${keyFilePath} ${bitPairs}`
+      )
+    }
     ////await chmod(keyFilePath, 0o400)
     log(`Create End User private key ${info('eu/private/key.pem')} ${ok}`)
   } catch (e) {
@@ -91,16 +123,22 @@ async function createCSREndUser (baseName, password, dns) {
   const country = 'US'
   const province = 'TX'
 
-  const createOpenSSLCnfFile = `echo "DNS.1 = ${dns}" >> temp.cnf && \
+  const addDnsToSANCmd = `echo && echo "DNS.2 = ${dns}" >> temp.cnf && \
     cat enduser.openssl.cnf temp.cnf > ${HOME_DATA}/san.openssl.cnf && \
     rm temp.cnf`
+
+  const cpToSAN = `cp enduser.openssl.cnf ${HOME_DATA}/san.openssl.cnf`
 
   const sslCsrCmd = `openssl req -new -key ${HOME_DATA}/eu/private/key.pem -passin pass:${password} \
     -subj "/C=${country}/ST=${province}/O=${orgName}/CN=${commonName}" \
     -out ${HOME_DATA}/eu/csr/csr.pem -config ${HOME_DATA}/san.openssl.cnf`
 
   try {
-    await exec(createOpenSSLCnfFile)
+    if (dns && dns.length > 0) {
+      await exec(addDnsToSANCmd)
+    } else {
+      await exec(cpToSAN)
+    }
     await fs.mkdir(`${HOME_DATA}/eu/csr`, { recursive: true })
     await exec(sslCsrCmd)
 
@@ -131,17 +169,40 @@ async function createCreateCertFromCSR (password) {
   }
 }
 
+async function createP12 (password) {
+  const sslP12Cmd =
+    password && password.length > 0
+      ? `openssl pkcs12 -export -passin pass:${password} -passout pass:${password} -inkey ${HOME_DATA}/eu/private/key.pem -in ${HOME_DATA}/eu/certs/cert.pem -out ${HOME_DATA}/eu/certs/cert.p12`
+      : `openssl pkcs12 -export -passout pass:${password} -inkey ${HOME_DATA}/eu/private/key.pem -in ${HOME_DATA}/eu/certs/cert.pem -out ${HOME_DATA}/eu/certs/cert.p12`
+  try {
+    await exec(sslP12Cmd)
+    log(`Create End User P12 Certificate ${info('eu/certs/cert.12')} ${ok}`)
+  } catch (e) {
+    log(err('Error ', e))
+  }
+}
+
 async function main () {
   const uname = await query('What is your name or organization name?')
   log(info(uname))
-  const sDns = await query('What is the DNS name of your server?')
-  log(info(sDns))
-  const pw = await genpw()
-  await createPrivateKeyForCA(pw)
-  await createCertificateForCA(uname, pw)
-  await createPrivateKeyForEndUser(pw)
-  await createCSREndUser(uname, pw, sDns)
-  await createCreateCertFromCSR(pw)
+  log('Localhost is already included by default.')
+  const sDns = await query(
+    'What is the additional DNS name of your server (leave blank if none)?'
+  )
+  if (sDns && sDns.length > 0) {
+    log(info('localhost'))
+    log(info(sDns))
+  } else {
+    log(info('localhost'))
+  }
+  const pwCA = await genpw()
+  const pwEU = await getPassphrase()
+  await createPrivateKeyForCA(pwCA)
+  await createCertificateForCA(uname, pwCA)
+  await createPrivateKeyForEndUser(pwEU)
+  await createCSREndUser(uname, pwEU, sDns)
+  await createCreateCertFromCSR(pwCA)
+  await createP12(pwEU)
 }
 
 main()
