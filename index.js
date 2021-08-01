@@ -1,6 +1,7 @@
-const { Input, Select } = require('enquirer')
+const { Input, Select, Confirm, Password } = require('enquirer')
 const fs = require('fs/promises')
-const { chmod } = require('fs/promises')
+const { access, chmod } = require('fs/promises')
+const { constants } = require('fs')
 const util = require('util')
 const exec = util.promisify(require('child_process').exec)
 const chalk = require('chalk')
@@ -11,23 +12,80 @@ const ok = chalk.green('successful')
 const err = chalk.red
 const info = chalk.blue
 
-async function genpw () {
-  const sslCsrCmd = `openssl rand -hex 32`
+async function genpw (size) {
+  const sslCsrCmd = `openssl rand -hex ${size}`
   const { stdout, stderr } = await exec(sslCsrCmd, { encoding: 'utf-8' })
   return stdout.replace(/[\r\n]/g, '')
 }
 
-async function query (question) {
+async function query (question, forceAnswer) {
   const prompt = new Input({
     message: question,
     initial: ''
   })
 
   const answer = await prompt.run()
-  return answer
+  if (answer || !forceAnswer) {
+    return answer
+  } else {
+    const prompt = new Input({
+      message: `${err(
+        "If you don't answer again, the program, will exit\n\r"
+      )} ${question}`,
+      initial: ''
+    })
+    const answer = await prompt.run()
+    if (answer) {
+      return answer
+    } else {
+      log(err('Good bye'))
+      process.exit()
+    }
+  }
 }
 
-async function getPassphrase () {
+async function promptForPasswordAndConfirm () {
+  let password = ''
+  let passwordConfirm = ''
+
+  while (
+    (password === '' && passwordConfirm === '') ||
+    password !== passwordConfirm
+  ) {
+    password = await promptPassword(`Please type your passphrase`)
+    passwordConfirm = await promptPassword(
+      `To confirm there\s no typo, please type your passphrase again`
+    )
+
+    if (password !== passwordConfirm) {
+      console.log('Passwords do not match. Please try again.')
+      console.log()
+    } else if (password === '' || passwordConfirm === '') {
+      console.log(
+        'Passwords cannot be left blank. Please try to enter a password.'
+      )
+      console.log()
+    } else if (password.length < 6 || password.length > 1023) {
+      console.log('Password must have between 6 to 1023 characters.')
+      console.log()
+      password = ''
+      passwordConfirm = ''
+    }
+  }
+
+  return password
+}
+
+async function writeToFile (filePath, content) {
+  try {
+    await fs.writeFile(filePath, content)
+  } catch (e) {
+    log(err(e))
+    log(info(content))
+  }
+}
+
+async function getEUPassphrase () {
   const choiceAutoPw = 'Auto generate the passphrase'
   const choiceSupplyPw = 'Provide my passphrase'
   const choiceNoPw = 'No passphrase'
@@ -41,16 +99,45 @@ async function getPassphrase () {
 
   const answer = await selectPwChoice.run()
   if (answer === choiceAutoPw) {
-    const pw = await genpw()
-    log('Generated passphrase is:')
-    log(info(pw))
+    const pw = await genpw(6)
+    const filePath = 'eu/passphrase.txt'
+    await writeToFile(`${HOME_DATA}/${filePath}`, pw)
+    log(`Generated passphrase is written to ${info(filePath)}`)
     return pw
   } else if (answer === choiceSupplyPw) {
-    const pw = await query('Please type your passphrase')
-    log(info(pw))
+    const pw = await promptForPasswordAndConfirm()
+    log(info('You passphrase is accepted'))
     return pw
   } else {
     log(info('No passphrase is required'))
+    return ''
+  }
+}
+
+async function getCAPassphrase () {
+  const choiceAutoPw = 'Auto generate the passphrase'
+  const choiceSupplyPw = 'Provide my passphrase'
+
+  const selectPwChoice = new Select({
+    name: 'mainmenu',
+    message:
+      'Do you want to auto generate the passphrase or provide your own passphrase?',
+    choices: [choiceAutoPw, choiceSupplyPw]
+  })
+
+  const answer = await selectPwChoice.run()
+  if (answer === choiceAutoPw) {
+    const pw = await genpw(32)
+    const filePath = 'ca/passphrase.txt'
+    await writeToFile(`${HOME_DATA}/${filePath}`, pw)
+    log(`Generated passphrase is written to ${info(filePath)}`)
+    return pw
+  } else if (answer === choiceSupplyPw) {
+    const pw = await promptForPasswordAndConfirm()
+    log(info('You passphrase is accepted'))
+    return pw
+  } else {
+    log(err('Something not right'))
     return ''
   }
 }
@@ -117,9 +204,7 @@ async function createPrivateKeyForEndUser (password) {
   }
 }
 
-async function createCSREndUser (baseName, password, dns) {
-  const orgName = `${baseName} Ltd`
-  const commonName = `${baseName} Ltd Web Client`
+async function createCSREndUser (orgName, commonName, password, dns) {
   const country = 'US'
   const province = 'TX'
 
@@ -182,12 +267,75 @@ async function createP12 (password) {
   }
 }
 
-async function main () {
-  const uname = await query('What is your name or organization name?')
+async function isCAPasswordCorrect (password) {
+  const sslCmd = `openssl rsa -noout -in ${HOME_DATA}/ca/private/ca.key.pem -passin "pass:${password}"`
+  try {
+    await exec(sslCmd)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function extractCNFromCert (certFile) {
+  const sslCmd = `openssl x509 -noout -subject -in ${certFile}`
+  try {
+    const { stdout, stderr } = await exec(sslCmd, { encoding: 'utf-8' })
+    const tokens = stdout
+      .split(',')
+      .map(t => t.replace(/[\'\r\n]/g, ''))
+      .map(t => t.trim())
+
+    const orgToken = tokens.filter(t => t.startsWith('O'))
+    const orgTokens = orgToken[0].split('=')
+
+    const cnToken = tokens.filter(t => t.startsWith('CN'))
+    const cnTokens = cnToken[0].split('=')
+    return [orgTokens[1].trim(), cnTokens[1].trim()]
+  } catch (e) {
+    log(err('Error ', e))
+  }
+}
+
+async function checkCAExists () {
+  const privateKeyDir = `${HOME_DATA}/ca/private`
+  const caKeyFilePath = `${privateKeyDir}/ca.key.pem`
+  const caCertDir = `${HOME_DATA}/ca/certs`
+  const caCertFilePath = `${caCertDir}/ca.cert.pem`
+
+  let caKeyFileExists = false
+  try {
+    await access(caKeyFilePath, constants.R_OK)
+    caKeyFileExists = true
+  } catch {}
+
+  let caCertFileExists = false
+  try {
+    await access(caCertFilePath, constants.R_OK)
+    caCertFileExists = true
+  } catch {}
+
+  return caKeyFileExists && caCertFileExists
+}
+
+async function promptOverrideCA () {
+  log()
+  const promptOverride = new Confirm({
+    name: 'confirmOverrideCA',
+    message: 'Do you want to create a new CA?'
+  })
+
+  const answer = await promptOverride.run()
+  return answer
+}
+
+async function startFresh () {
+  const uname = await query('What is your name or organization name?', true)
   log(info(uname))
   log('Localhost is already included by default.')
   const sDns = await query(
-    'What is the additional DNS name of your server (leave blank if none)?'
+    'What is the additional DNS name of your server (leave blank if none)?',
+    false
   )
   if (sDns && sDns.length > 0) {
     log(info('localhost'))
@@ -195,14 +343,94 @@ async function main () {
   } else {
     log(info('localhost'))
   }
-  const pwCA = await genpw()
-  const pwEU = await getPassphrase()
+
+  log(
+    chalk.bold(
+      `The CA Certificate ${info('must be encrypted')} with a passphrase.`
+    )
+  )
+  const pwCA = await getCAPassphrase()
+
+  log(
+    'Similarly, the signed certificate to run your server can also be encrypted but does not have to.'
+  )
+  const pwEU = await getEUPassphrase()
+
   await createPrivateKeyForCA(pwCA)
   await createCertificateForCA(uname, pwCA)
   await createPrivateKeyForEndUser(pwEU)
-  await createCSREndUser(uname, pwEU, sDns)
+
+  const orgName = `${uname} Ltd`
+  const commonName = `${uname} Ltd Web Client`
+
+  await createCSREndUser(orgName, commonName, pwEU, sDns)
   await createCreateCertFromCSR(pwCA)
   await createP12(pwEU)
+}
+
+async function startNewEU (pwCA, euOrg, euCN) {
+  const sDns = await query('What is the DNS name of your server?', true)
+  log(info(sDns))
+  const pwEU = await getEUPassphrase()
+  await createPrivateKeyForEndUser(pwEU)
+  await createCSREndUser(euOrg, euCN, pwEU, sDns)
+  await createCreateCertFromCSR(pwCA)
+  await createP12(pwEU)
+}
+
+async function promptPassword (message) {
+  const promptPassword = new Password({
+    name: 'passwd',
+    message
+  })
+  const password = await promptPassword.run()
+  return password
+}
+
+async function handleExisingCA (caCN, euCN, euOrg) {
+  log(`Your self-signed CA, ${info(caCN)} is already established.`)
+  log(
+    'You should continue using it to sign new certificates for more DNS servers.'
+  )
+  log(
+    'If you forgot its passphrase, you can delete its private key, certificate and create a new CA.'
+  )
+  const override = await promptOverrideCA()
+  if (override) {
+    await startFresh()
+  } else {
+    const existingPasswd = await promptPassword(
+      `What is the passphrase for your exsisting self-signed CA ${info(caCN)}?`
+    )
+    if (existingPasswd.length > 0) {
+      const validCAPassword = await isCAPasswordCorrect(existingPasswd)
+      if (validCAPassword) {
+        await startNewEU(existingPasswd, euOrg, euCN)
+      } else {
+        log(err('The CA passphrase you entered is incorrect'))
+      }
+    } else {
+      log(err('The CA passphrase you entered is incorrect'))
+    }
+  }
+}
+
+async function main () {
+  const caExists = await checkCAExists()
+
+  if (caExists) {
+    const caCertDir = `${HOME_DATA}/ca/certs`
+    const caCertFilePath = `${caCertDir}/ca.cert.pem`
+    const euCertDir = `${HOME_DATA}/eu/certs`
+    const euCertFilePath = `${euCertDir}/cert.pem`
+
+    const [caOrg, caCN] = await extractCNFromCert(caCertFilePath)
+    const [euOrg, euCN] = await extractCNFromCert(euCertFilePath)
+
+    await handleExisingCA(caCN, euCN, euOrg)
+  } else {
+    await startFresh()
+  }
 }
 
 main()
