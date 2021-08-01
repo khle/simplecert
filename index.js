@@ -85,6 +85,20 @@ async function writeToFile (filePath, content) {
   }
 }
 
+async function promptAutoGenerate () {
+  const choiceAuto = 'Yes, auto generate everything'
+  const choiceManual = 'No, I want to control each answer'
+
+  const selectAutoGenerate = new Select({
+    name: 'menu',
+    message: 'Do you want to auto generate everything or control each answer?',
+    choices: [choiceAuto, choiceManual]
+  })
+
+  const answer = await selectAutoGenerate.run()
+  return answer === choiceAuto ? true : false
+}
+
 async function getEUPassphrase () {
   const choiceAutoPw = 'Auto generate the passphrase'
   const choiceSupplyPw = 'Provide my passphrase'
@@ -102,7 +116,7 @@ async function getEUPassphrase () {
     const pw = await genpw(6)
     const filePath = 'eu/passphrase.txt'
     await writeToFile(`${HOME_DATA}/${filePath}`, pw)
-    log(`Generated passphrase is written to ${info(filePath)}`)
+    log(`Generated passphrase for certificate is written to ${info(filePath)}`)
     return pw
   } else if (answer === choiceSupplyPw) {
     const pw = await promptForPasswordAndConfirm()
@@ -130,7 +144,7 @@ async function getCAPassphrase () {
     const pw = await genpw(32)
     const filePath = 'ca/passphrase.txt'
     await writeToFile(`${HOME_DATA}/${filePath}`, pw)
-    log(`Generated passphrase is written to ${info(filePath)}`)
+    log(`Generated passphrase for CA is written to to ${info(filePath)}`)
     return pw
   } else if (answer === choiceSupplyPw) {
     const pw = await promptForPasswordAndConfirm()
@@ -344,17 +358,37 @@ async function startFresh () {
     log(info('localhost'))
   }
 
-  log(
-    chalk.bold(
-      `The CA Certificate ${info('must be encrypted')} with a passphrase.`
-    )
-  )
-  const pwCA = await getCAPassphrase()
+  let pwCA
+  let pwEU
 
-  log(
-    'Similarly, the signed certificate to run your server can also be encrypted but does not have to.'
-  )
-  const pwEU = await getEUPassphrase()
+  const autogenerate = await promptAutoGenerate()
+  if (autogenerate) {
+    pwCa = await genpw(32)
+    const caPassFilePath = 'ca/passphrase.txt'
+    await writeToFile(`${HOME_DATA}/${caPassFilePath}`, pwCa)
+    log(`Generated passphrase for CA is written to ${info(caPassFilePath)}`)
+
+    pwEU = await genpw(6)
+    const euPassFilePath = 'eu/passphrase.txt'
+    await writeToFile(`${HOME_DATA}/${euPassFilePath}`, pwEU)
+    log(
+      `Generated passphrase for certificate is written to ${info(
+        euPassFilePath
+      )}`
+    )
+  } else {
+    log(
+      chalk.bold(
+        `The CA Certificate ${info('must be encrypted')} with a passphrase.`
+      )
+    )
+    pwCA = await getCAPassphrase()
+
+    log(
+      'Similarly, the signed certificate to run your server can also be encrypted but does not have to.'
+    )
+    pwEU = await getEUPassphrase()
+  }
 
   await createPrivateKeyForCA(pwCA)
   await createCertificateForCA(uname, pwCA)
