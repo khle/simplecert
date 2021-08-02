@@ -514,7 +514,7 @@ async function main () {
     const euPassFile = `${HOME_DATA}/eu/passphrase.txt`
     const pwEU = await extractPassphraseFromFile(euPassFile)
 
-    const validCAPassword = await isCAPasswordFromFileCorrect(caPassFile)
+    const validCAPassword = await isCAPasswordCorrect(pwCA)
     if (validCAPassword) {
       await handleExistingCAWithPasswd(caCN, euCN, euOrg, pwCA, pwEU)
     } else {
