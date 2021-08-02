@@ -487,7 +487,7 @@ async function handleExistingCANoPasswd (caCN, euCN, euOrg) {
   }
 }
 
-async function handleExistingCAWithPasswd (caCN, euCN, euOrg, pwCA, pwEU) {
+async function handleExistingCAWithPasswd (caCN, euCN, euOrg, pwCA) {
   await startNewEU(pwCA, euOrg, euCN)
 }
 
@@ -511,12 +511,10 @@ async function main () {
 
     const caPassFile = `${HOME_DATA}/ca/passphrase.txt`
     const pwCA = await extractPassphraseFromFile(caPassFile)
-    const euPassFile = `${HOME_DATA}/eu/passphrase.txt`
-    const pwEU = await extractPassphraseFromFile(euPassFile)
 
     const validCAPassword = await isCAPasswordCorrect(pwCA)
     if (validCAPassword) {
-      await handleExistingCAWithPasswd(caCN, euCN, euOrg, pwCA, pwEU)
+      await handleExistingCAWithPasswd(caCN, euCN, euOrg, pwCA)
     } else {
       await handleExistingCANoPasswd(caCN, euCN, euOrg)
     }
