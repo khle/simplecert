@@ -78,10 +78,18 @@ async function promptForPasswordAndConfirm () {
 
 async function writeToFile (filePath, content) {
   try {
-    await fs.writeFile(filePath, content)
+    await fs.writeFile(filePath, content, { encoding: 'utf-8' })
   } catch (e) {
-    log(err(e))
+    log(err('Error writeToFile', e))
     log(info(content))
+  }
+}
+
+async function removeFile (filePath) {
+  try {
+    await fs.unlink(filePath)
+  } catch (e) {
+    log(err('Error removeFile', e))
   }
 }
 
@@ -121,6 +129,11 @@ async function getEUPassphrase () {
   } else if (answer === choiceSupplyPw) {
     const pw = await promptForPasswordAndConfirm()
     log(info('You passphrase is accepted'))
+    const filePath = 'eu/passphrase.txt'
+    const passFileExists = await fileExists(`${HOME_DATA}/${filePath}`)
+    if (passFileExists) {
+      await removeFile(`${HOME_DATA}/${filePath}`)
+    }
     return pw
   } else {
     log(info('No passphrase is required'))
@@ -149,9 +162,14 @@ async function getCAPassphrase () {
   } else if (answer === choiceSupplyPw) {
     const pw = await promptForPasswordAndConfirm()
     log(info('You passphrase is accepted'))
+    const filePath = 'ca/passphrase.txt'
+    const passFileExists = await fileExists(`${HOME_DATA}/${filePath}`)
+    if (passFileExists) {
+      await removeFile(`${HOME_DATA}/${filePath}`)
+    }
     return pw
   } else {
-    log(err('Something not right'))
+    log(err('Something not right in getCAPassphrase'))
     return ''
   }
 }
@@ -172,7 +190,7 @@ async function createPrivateKeyForCA (password) {
     ////await chmod(keyFilePath, 0o400)
     log(`Create CA private key ${ok}`)
   } catch (e) {
-    log(err('Error ', e))
+    log(err('Error createPrivateKeyForCA', e))
   }
 }
 
@@ -193,7 +211,7 @@ async function createCertificateForCA (baseName, password) {
 
     log(`Create CA certificate ${info('ca/certs/ca.cert.pem')} ${ok}`)
   } catch (e) {
-    log(err('Error ', e))
+    log(err('Error createCertificateForCA', e))
   }
 }
 
@@ -214,7 +232,7 @@ async function createPrivateKeyForEndUser (password) {
     ////await chmod(keyFilePath, 0o400)
     log(`Create End User private key ${info('eu/private/key.pem')} ${ok}`)
   } catch (e) {
-    log(err('Error ', e))
+    log(err('Error createPrivateKeyForEndUser', e))
   }
 }
 
@@ -243,7 +261,7 @@ async function createCSREndUser (orgName, commonName, password, dns) {
 
     log(`Create End User CSR ${ok}`)
   } catch (e) {
-    log(err('Error ', e))
+    log(err('Error createCSREndUser', e))
   }
 }
 
@@ -264,7 +282,7 @@ async function createCreateCertFromCSR (password) {
 
     log(`Create End User Certificate ${info('eu/certs/cert.pem')} ${ok}`)
   } catch (e) {
-    log(err('Error ', e))
+    log(err('Error createCreateCertFromCSR', e))
   }
 }
 
@@ -277,7 +295,7 @@ async function createP12 (password) {
     await exec(sslP12Cmd)
     log(`Create End User P12 Certificate ${info('eu/certs/cert.12')} ${ok}`)
   } catch (e) {
-    log(err('Error ', e))
+    log(err('Error createP12', e))
   }
 }
 
@@ -287,6 +305,17 @@ async function isCAPasswordCorrect (password) {
     await exec(sslCmd)
     return true
   } catch {
+    return false
+  }
+}
+
+async function isCAPasswordFromFileCorrect (filePath) {
+  const sslCmd = `openssl rsa -noout -in ${HOME_DATA}/ca/private/ca.key.pem -passin "file:${filePath}"`
+  try {
+    const { stdout, stderr } = await exec(sslCmd)
+    return true
+  } catch (e) {
+    log(err('Error isCAPasswordFromFileCorrect', e))
     return false
   }
 }
@@ -307,8 +336,26 @@ async function extractCNFromCert (certFile) {
     const cnTokens = cnToken[0].split('=')
     return [orgTokens[1].trim(), cnTokens[1].trim()]
   } catch (e) {
-    log(err('Error ', e))
+    log(err('Error extractCNFromCert', e))
   }
+}
+
+async function extractPassphraseFromFile (textFile) {
+  try {
+    const pw = await fs.readFile(textFile, { encoding: 'utf-8' })
+    return pw
+  } catch (e) {
+    return undefined
+  }
+}
+
+async function fileExists (filePath) {
+  let exists = false
+  try {
+    await access(filePath, constants.R_OK)
+    exists = true
+  } catch {}
+  return exists
 }
 
 async function checkCAExists () {
@@ -317,17 +364,8 @@ async function checkCAExists () {
   const caCertDir = `${HOME_DATA}/ca/certs`
   const caCertFilePath = `${caCertDir}/ca.cert.pem`
 
-  let caKeyFileExists = false
-  try {
-    await access(caKeyFilePath, constants.R_OK)
-    caKeyFileExists = true
-  } catch {}
-
-  let caCertFileExists = false
-  try {
-    await access(caCertFilePath, constants.R_OK)
-    caCertFileExists = true
-  } catch {}
+  const caKeyFileExists = await fileExists(caKeyFilePath)
+  const caCertFileExists = await fileExists(caCertFilePath)
 
   return caKeyFileExists && caCertFileExists
 }
@@ -363,9 +401,9 @@ async function startFresh () {
 
   const autogenerate = await promptAutoGenerate()
   if (autogenerate) {
-    pwCa = await genpw(32)
+    pwCA = await genpw(32)
     const caPassFilePath = 'ca/passphrase.txt'
-    await writeToFile(`${HOME_DATA}/${caPassFilePath}`, pwCa)
+    await writeToFile(`${HOME_DATA}/${caPassFilePath}`, pwCA)
     log(`Generated passphrase for CA is written to ${info(caPassFilePath)}`)
 
     pwEU = await genpw(6)
@@ -421,7 +459,7 @@ async function promptPassword (message) {
   return password
 }
 
-async function handleExisingCA (caCN, euCN, euOrg) {
+async function handleExistingCANoPasswd (caCN, euCN, euOrg) {
   log(`Your self-signed CA, ${info(caCN)} is already established.`)
   log(
     'You should continue using it to sign new certificates for more DNS servers.'
@@ -449,6 +487,10 @@ async function handleExisingCA (caCN, euCN, euOrg) {
   }
 }
 
+async function handleExistingCAWithPasswd (caCN, euCN, euOrg, pwCA, pwEU) {
+  await startNewEU(pwCA, euOrg, euCN)
+}
+
 async function main () {
   const caExists = await checkCAExists()
 
@@ -458,10 +500,26 @@ async function main () {
     const euCertDir = `${HOME_DATA}/eu/certs`
     const euCertFilePath = `${euCertDir}/cert.pem`
 
-    const [caOrg, caCN] = await extractCNFromCert(caCertFilePath)
-    const [euOrg, euCN] = await extractCNFromCert(euCertFilePath)
+    const euCertExists = await fileExists(euCertFilePath)
 
-    await handleExisingCA(caCN, euCN, euOrg)
+    const [caOrg, caCN] = await extractCNFromCert(caCertFilePath)
+
+    const fallbackEuCN = caCN.replace('Certificate Authority', 'Web Client')
+    const [euOrg, euCN] = euCertExists
+      ? await extractCNFromCert(euCertFilePath)
+      : [caOrg, fallbackEuCN]
+
+    const caPassFile = `${HOME_DATA}/ca/passphrase.txt`
+    const pwCA = await extractPassphraseFromFile(caPassFile)
+    const euPassFile = `${HOME_DATA}/eu/passphrase.txt`
+    const pwEU = await extractPassphraseFromFile(euPassFile)
+
+    const validCAPassword = await isCAPasswordFromFileCorrect(caPassFile)
+    if (validCAPassword) {
+      await handleExistingCAWithPasswd(caCN, euCN, euOrg, pwCA, pwEU)
+    } else {
+      await handleExistingCANoPasswd(caCN, euCN, euOrg)
+    }
   } else {
     await startFresh()
   }
