@@ -281,7 +281,7 @@ async function createCreateCertFromCSR (password) {
   -CAcreateserial \
   -passin pass:${password} \
   -out ${HOME_DATA}/eu/certs/cert.pem \
-  -days 10 -sha256 \
+  -days 365 -sha256 \
   -extensions req_ext -extfile ${HOME_DATA}/san.openssl.cnf`
 
   try {
