@@ -181,7 +181,7 @@ async function createDirs () {
     await fs.mkdir(`${HOME_DATA}/eu/private`, { recursive: true })
     await fs.mkdir(`${HOME_DATA}/eu/csr`, { recursive: true })
     await fs.mkdir(`${HOME_DATA}/eu/certs`, { recursive: true })
-    await chmod(`${privateKeyDir}`, 0o700)
+    await chmod(`${HOME_DATA}/ca/private`, 0o700)
   } catch (e) {
     log(err('Error createDirs', e))
   }
