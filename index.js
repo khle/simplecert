@@ -174,14 +174,25 @@ async function getCAPassphrase () {
   }
 }
 
+async function createDirs () {
+  try {
+    await fs.mkdir(`${HOME_DATA}/ca/private`, { recursive: true })
+    await fs.mkdir(`${HOME_DATA}/ca/certs`, { recursive: true })
+    await fs.mkdir(`${HOME_DATA}/eu/private`, { recursive: true })
+    await fs.mkdir(`${HOME_DATA}/eu/csr`, { recursive: true })
+    await fs.mkdir(`${HOME_DATA}/eu/certs`, { recursive: true })
+    await chmod(`${privateKeyDir}`, 0o700)
+  } catch (e) {
+    log(err('Error createDirs', e))
+  }
+}
+
 async function createPrivateKeyForCA (password) {
   const privateKeyDir = `${HOME_DATA}/ca/private`
   const keyFilePath = `${privateKeyDir}/ca.key.pem`
   const bitPairs = 4096
 
   try {
-    await fs.mkdir(`${privateKeyDir}`, { recursive: true })
-    await chmod(`${privateKeyDir}`, 0o700)
     await fs.writeFile(`${HOME_DATA}/ca/index.txt`, '')
     await fs.writeFile(`${HOME_DATA}/ca/serial`, '1000')
     await exec(
@@ -206,7 +217,6 @@ async function createCertificateForCA (baseName, password) {
     -out ${HOME_DATA}/ca/certs/ca.cert.pem`
 
   try {
-    await fs.mkdir(`${HOME_DATA}/ca/certs`, { recursive: true })
     await exec(sslCmdCreateRootCaCert)
 
     log(`Create CA certificate ${info('ca/certs/ca.cert.pem')} ${ok}`)
@@ -221,7 +231,6 @@ async function createPrivateKeyForEndUser (password) {
   const bitPairs = 2048
 
   try {
-    await fs.mkdir(`${privateKeyDir}`, { recursive: true })
     if (!password || password.length === 0) {
       await exec(`openssl genrsa -out ${keyFilePath} ${bitPairs}`)
     } else {
@@ -256,7 +265,6 @@ async function createCSREndUser (orgName, commonName, password, dns) {
     } else {
       await exec(cpToSAN)
     }
-    await fs.mkdir(`${HOME_DATA}/eu/csr`, { recursive: true })
     await exec(sslCsrCmd)
 
     log(`Create End User CSR ${ok}`)
@@ -277,7 +285,6 @@ async function createCreateCertFromCSR (password) {
   -extensions req_ext -extfile ${HOME_DATA}/san.openssl.cnf`
 
   try {
-    await fs.mkdir(`${HOME_DATA}/eu/certs`, { recursive: true })
     await exec(sslCertCmd)
 
     log(`Create End User Certificate ${info('eu/certs/cert.pem')} ${ok}`)
@@ -382,6 +389,7 @@ async function promptOverrideCA () {
 }
 
 async function startFresh () {
+  await createDirs()
   const uname = await query('What is your name or organization name?', true)
   log(info(uname))
   log('Localhost is already included by default.')
